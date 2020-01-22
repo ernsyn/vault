@@ -12,6 +12,7 @@ import (
 	"github.com/hashicorp/vault/sdk/helper/useragent"
 	"github.com/hashicorp/vault/sdk/logical"
 	"google.golang.org/api/iam/v1"
+	"google.golang.org/api/option"
 )
 
 const (
@@ -46,11 +47,19 @@ func pathsRoleSet(b *backend) []*framework.Path {
 				},
 			},
 			ExistenceCheck: b.pathRoleSetExistenceCheck,
-			Callbacks: map[logical.Operation]framework.OperationFunc{
-				logical.DeleteOperation: b.pathRoleSetDelete,
-				logical.ReadOperation:   b.pathRoleSetRead,
-				logical.CreateOperation: b.pathRoleSetCreateUpdate,
-				logical.UpdateOperation: b.pathRoleSetCreateUpdate,
+			Operations: map[logical.Operation]framework.OperationHandler{
+				logical.DeleteOperation: &framework.PathOperation{
+					Callback: b.pathRoleSetDelete,
+				},
+				logical.ReadOperation: &framework.PathOperation{
+					Callback: b.pathRoleSetRead,
+				},
+				logical.CreateOperation: &framework.PathOperation{
+					Callback: b.pathRoleSetCreateUpdate,
+				},
+				logical.UpdateOperation: &framework.PathOperation{
+					Callback: b.pathRoleSetCreateUpdate,
+				},
 			},
 			HelpSynopsis:    pathRoleSetHelpSyn,
 			HelpDescription: pathRoleSetHelpDesc,
@@ -65,8 +74,10 @@ func pathsRoleSet(b *backend) []*framework.Path {
 				},
 			},
 			ExistenceCheck: b.pathRoleSetExistenceCheck,
-			Callbacks: map[logical.Operation]framework.OperationFunc{
-				logical.UpdateOperation: b.pathRoleSetRotateAccount,
+			Operations: map[logical.Operation]framework.OperationHandler{
+				logical.UpdateOperation: &framework.PathOperation{
+					Callback: b.pathRoleSetRotateAccount,
+				},
 			},
 			HelpSynopsis:    pathRoleSetRotateHelpSyn,
 			HelpDescription: pathRoleSetRotateHelpDesc,
@@ -81,8 +92,10 @@ func pathsRoleSet(b *backend) []*framework.Path {
 				},
 			},
 			ExistenceCheck: b.pathRoleSetExistenceCheck,
-			Callbacks: map[logical.Operation]framework.OperationFunc{
-				logical.UpdateOperation: b.pathRoleSetRotateKey,
+			Operations: map[logical.Operation]framework.OperationHandler{
+				logical.UpdateOperation: &framework.PathOperation{
+					Callback: b.pathRoleSetRotateKey,
+				},
 			},
 			HelpSynopsis:    pathRoleSetRotateKeyHelpSyn,
 			HelpDescription: pathRoleSetRotateKeyHelpDesc,
@@ -90,8 +103,10 @@ func pathsRoleSet(b *backend) []*framework.Path {
 		// Paths for listing role sets
 		{
 			Pattern: "rolesets/?",
-			Callbacks: map[logical.Operation]framework.OperationFunc{
-				logical.ListOperation: b.pathRoleSetList,
+			Operations: map[logical.Operation]framework.OperationHandler{
+				logical.ListOperation: &framework.PathOperation{
+					Callback: b.pathRoleSetList,
+				},
 			},
 
 			HelpSynopsis:    pathListRoleSetHelpSyn,
@@ -99,8 +114,10 @@ func pathsRoleSet(b *backend) []*framework.Path {
 		},
 		{
 			Pattern: "roleset/?",
-			Callbacks: map[logical.Operation]framework.OperationFunc{
-				logical.ListOperation: b.pathRoleSetList,
+			Operations: map[logical.Operation]framework.OperationHandler{
+				logical.ListOperation: &framework.PathOperation{
+					Callback: b.pathRoleSetList,
+				},
 			},
 
 			HelpSynopsis:    pathListRoleSetHelpSyn,
@@ -217,7 +234,7 @@ func (b *backend) pathRoleSetDelete(ctx context.Context, req *logical.Request, d
 		return nil, err
 	}
 
-	iamAdmin, err := iam.New(httpC)
+	iamAdmin, err := iam.NewService(ctx, option.WithHTTPClient(httpC))
 	if err != nil {
 		return nil, err
 	}
@@ -330,15 +347,24 @@ func (b *backend) pathRoleSetCreateUpdate(ctx context.Context, req *logical.Requ
 
 	// Bindings
 	bRaw, newBindings := d.GetOk("bindings")
-	if len(bRaw.(string)) == 0 {
-		return logical.ErrorResponse("given empty bindings string"), nil
+
+	if newBindings {
+		bindings, ok := bRaw.(string)
+		if !ok {
+			return logical.ErrorResponse("bindings are not a string"), nil
+		}
+		if bindings == "" {
+			return logical.ErrorResponse("bindings are empty"), nil
+		}
 	}
 
-	if isCreate && newBindings == false {
+	if isCreate && !newBindings {
 		return logical.ErrorResponse("bindings are required for new role set"), nil
 	}
 
-	if !newBindings {
+	// If no new bindings or new bindings are exactly same as old bindings,
+	// just update the role set without rotating service account.
+	if !newBindings || rs.bindingHash() == getStringHash(bRaw.(string)) {
 		// Just save role with updated metadata:
 		if err := rs.save(ctx, req.Storage); err != nil {
 			return logical.ErrorResponse(err.Error()), nil
@@ -356,6 +382,7 @@ func (b *backend) pathRoleSetCreateUpdate(ctx context.Context, req *logical.Requ
 		return logical.ErrorResponse("unable to parse any bindings from given bindings HCL"), nil
 	}
 	rs.RawBindings = bRaw.(string)
+
 	updateWarns, err := b.saveRoleSetWithNewAccount(ctx, req.Storage, rs, project, bindings, scopes)
 	if updateWarns != nil {
 		warnings = append(warnings, updateWarns...)

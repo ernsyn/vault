@@ -53,26 +53,6 @@ func TestSystem_GRPC_maxLeaseTTL(t *testing.T) {
 	}
 }
 
-func TestSystem_GRPC_sudoPrivilege(t *testing.T) {
-	sys := logical.TestSystemView()
-	sys.SudoPrivilegeVal = true
-	client, _ := plugin.TestGRPCConn(t, func(s *grpc.Server) {
-		pb.RegisterSystemViewServer(s, &gRPCSystemViewServer{
-			impl: sys,
-		})
-	})
-	defer client.Close()
-	testSystemView := newGRPCSystemView(client)
-
-	ctx := context.Background()
-
-	expected := sys.SudoPrivilege(ctx, "foo", "bar")
-	actual := testSystemView.SudoPrivilege(ctx, "foo", "bar")
-	if !reflect.DeepEqual(expected, actual) {
-		t.Fatalf("expected: %v, got: %v", expected, actual)
-	}
-}
-
 func TestSystem_GRPC_tainted(t *testing.T) {
 	sys := logical.TestSystemView()
 	sys.TaintedVal = true
@@ -200,6 +180,34 @@ func TestSystem_GRPC_entityInfo(t *testing.T) {
 	}
 	if !proto.Equal(sys.EntityVal, actual) {
 		t.Fatalf("expected: %v, got: %v", sys.EntityVal, actual)
+	}
+}
+
+func TestSystem_GRPC_groupsForEntity(t *testing.T) {
+	sys := logical.TestSystemView()
+	sys.GroupsVal = []*logical.Group{
+		{
+			ID:   "group1-id",
+			Name: "group1",
+			Metadata: map[string]string{
+				"group-metadata": "metadata-value",
+			},
+		},
+	}
+	client, _ := plugin.TestGRPCConn(t, func(s *grpc.Server) {
+		pb.RegisterSystemViewServer(s, &gRPCSystemViewServer{
+			impl: sys,
+		})
+	})
+	defer client.Close()
+	testSystemView := newGRPCSystemView(client)
+
+	actual, err := testSystemView.GroupsForEntity("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !proto.Equal(sys.GroupsVal[0], actual[0]) {
+		t.Fatalf("expected: %v, got: %v", sys.GroupsVal, actual)
 	}
 }
 

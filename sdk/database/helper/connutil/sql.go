@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"net/url"
 	"strings"
 	"sync"
 	"time"
@@ -54,13 +55,21 @@ func (c *SQLConnectionProducer) Init(ctx context.Context, conf map[string]interf
 		return nil, fmt.Errorf("connection_url cannot be empty")
 	}
 
+	// Don't escape special characters for MySQL password
+	password := c.Password
+	if c.Type != "mysql" {
+		password = url.PathEscape(c.Password)
+	}
+
+	// QueryHelper doesn't do any SQL escaping, but if it starts to do so
+	// then maybe we won't be able to use it to do URL substitution any more.
 	c.ConnectionURL = dbutil.QueryHelper(c.ConnectionURL, map[string]string{
-		"username": c.Username,
-		"password": c.Password,
+		"username": url.PathEscape(c.Username),
+		"password": password,
 	})
 
 	if c.MaxOpenConnections == 0 {
-		c.MaxOpenConnections = 2
+		c.MaxOpenConnections = 4
 	}
 
 	if c.MaxIdleConnections == 0 {
